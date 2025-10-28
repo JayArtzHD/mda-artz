@@ -1,0 +1,100 @@
+name: Validate KB Templates
+
+on:
+  pull_request:
+    paths:
+      - 'templates/**.yml'
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.draft == false }}
+    env:
+      # Set these to your org and team; adjust approvals as needed
+      ORG_NAME: <ORG_NAME>
+      TEAM_SLUG: <TEAM_SLUG>
+      REQUIRED_APPROVALS: '2'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install jq and yq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq python3-pip
+          pip install --quiet yq
+      - name: Check immutable templates
+        id: immutable_check
+        run: |
+          # Determine changed KB templates between base and head
+          changed_files=$(git diff --name-only origin/${{ github.base_ref }}...${{ github.head_ref }} -- 'templates' || true)
+          if [ -z "$changed_files" ]; then
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          immutable_changed=false
+          for file in $changed_files; do
+            # Skip deleted files
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            # Read immutable flag from base
+            base_content=$(git show origin/${{ github.base_ref }}:"$file" 2>/dev/null || true)
+            if [ -n "$base_content" ]; then
+              base_imm=$(echo "$base_content" | yq e '.immutable' - 2>/dev/null || echo 'false')
+            else
+              base_imm='false'
+            fi
+            new_imm=$(yq e '.immutable' "$file" 2>/dev/null || echo 'false')
+            # If base had immutable=true and the file content changed, mark as immutable_changed
+            if [ "$base_imm" = "true" ] && ! git diff --quiet origin/${{ github.base_ref }}...${{ github.head_ref }} -- "$file"; then
+              echo "Immutable template modified: $file"
+              immutable_changed=true
+            fi
+          done
+          echo "immutable_changed=$immutable_changed" >> $GITHUB_OUTPUT
+      - name: Verify label and approvals
+        if: ${{ steps.immutable_check.outputs.immutable_changed == 'true' }}
+        run: |
+          pr_number=${{ github.event.pull_request.number }}
+          owner=${{ github.repository_owner }}
+          repo=${{ github.event.repository.name }}
+          # Check for required label
+          label_required="template-update"
+          labels=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT }}" \
+            "https://api.github.com/repos/$owner/$repo/pulls/$pr_number" | jq -r '.labels[].name')
+          has_label=false
+          for lbl in $labels; do
+            if [ "$lbl" = "$label_required" ]; then
+              has_label=true
+              break
+            fi
+          done
+          if [ "$has_label" = "false" ]; then
+            echo "::error ::PR must have '$label_required' label to modify immutable templates"
+            exit 1
+          fi
+          # Fetch team members
+          team_members=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT }}" \
+            "https://api.github.com/orgs/${{ env.ORG_NAME }}/teams/${{ env.TEAM_SLUG }}/members?per_page=100" | jq -r '.[].login')
+          # Fetch approved reviewers
+          approved_reviewers=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT }}" \
+            "https://api.github.com/repos/$owner/$repo/pulls/$pr_number/reviews?per_page=100" \
+            | jq -r '.[] | select(.state=="APPROVED") | .user.login' | sort -u)
+          count=0
+          for member in $team_members; do
+            for reviewer in $approved_reviewers; do
+              if [ "$member" = "$reviewer" ]; then
+                count=$((count+1))
+                break
+              fi
+            done
+          done
+          echo "Approvals from team members: $count"
+          if [ "$count" -lt "${{ env.REQUIRED_APPROVALS }}" ]; then
+            echo "::error ::Not enough approvals from kb-admins team: $count < ${!#}"
+            exit 1
+          fi
+          echo "Immutable template modifications validated with label and approvals."
