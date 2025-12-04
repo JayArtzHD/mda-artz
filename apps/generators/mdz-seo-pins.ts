@@ -30,73 +30,73 @@ interface ProductInput {
   image_url: string;
 }
 
-function truncate(str: string, max: number): string {
-  return str.length > max ? str.slice(0, max).trim() : str.trim();
+function truncateText(inputText: string, maxLength: number): string {
+  return inputText.length > maxLength ? inputText.slice(0, maxLength).trim() : inputText.trim();
 }
 
-function validateContent(text: string): void {
-  const banned = ['pink', 'rainbow'];
+function validateContentForBannedWords(contentText: string): void {
+  const bannedWords = ['pink', 'rainbow'];
   if (process.env.ALLOW_PASTEL === 'true') return;
-  banned.forEach(word => {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) {
-      throw new Error(`Banned word "${word}" detected in: ${text}`);
+  bannedWords.forEach(bannedWord => {
+    if (new RegExp(`\\b${bannedWord}\\b`, 'i').test(contentText)) {
+      throw new Error(`Banned word "${bannedWord}" detected in: ${contentText}`);
     }
   });
 }
 
 function generateSeoFiles(products: ProductInput[]): void {
   products.forEach(product => {
-    validateContent(product.title);
-    validateContent(product.description);
-    validateContent(product.alt);
-    const meta = {
+    validateContentForBannedWords(product.title);
+    validateContentForBannedWords(product.description);
+    validateContentForBannedWords(product.alt);
+    const seoMetadata = {
       product_handle: product.handle,
-      meta_title: truncate(product.title, 60),
-      meta_description: truncate(product.description, 160),
-      image_alt_text: truncate(product.alt, 150),
+      meta_title: truncateText(product.title, 60),
+      meta_description: truncateText(product.description, 160),
+      image_alt_text: truncateText(product.alt, 150),
     };
-    const outDir = path.join('build', 'seo');
-    fs.mkdirSync(outDir, { recursive: true });
+    const outputDirectory = path.join('build', 'seo');
+    fs.mkdirSync(outputDirectory, { recursive: true });
     fs.writeFileSync(
-      path.join(outDir, `${product.handle}.json`),
-      JSON.stringify(meta, null, 2),
+      path.join(outputDirectory, `${product.handle}.json`),
+      JSON.stringify(seoMetadata, null, 2),
       'utf8',
     );
   });
 }
 
-function generatePinsCsv(products: ProductInput[]): void {
-  const lines = [
+function generatePinterestCsv(products: ProductInput[]): void {
+  const csvRows = [
     ['Title', 'Description', 'Alt Text', 'Board', 'URL', 'Tags', 'Image_URL'].join(','),
   ];
   products.forEach(product => {
-    validateContent(product.title);
-    validateContent(product.description);
-    validateContent(product.alt);
-    const title = truncate(product.title, 60).replace(/"/g, '');
-    const description = truncate(product.description, 160).replace(/"/g, '');
-    const alt = truncate(product.alt, 150).replace(/"/g, '');
-    const tags = product.tags.join(' ');
-    const row = [title, description, alt, product.board, product.url, tags, product.image_url]
+    validateContentForBannedWords(product.title);
+    validateContentForBannedWords(product.description);
+    validateContentForBannedWords(product.alt);
+    const sanitizedTitle = truncateText(product.title, 60).replace(/"/g, '');
+    const sanitizedDescription = truncateText(product.description, 160).replace(/"/g, '');
+    const sanitizedAltText = truncateText(product.alt, 150).replace(/"/g, '');
+    const joinedTags = product.tags.join(' ');
+    const csvRow = [sanitizedTitle, sanitizedDescription, sanitizedAltText, product.board, product.url, joinedTags, product.image_url]
       .map(field => (field.includes(',') ? `"${field}"` : field))
       .join(',');
-    lines.push(row);
+    csvRows.push(csvRow);
   });
-  const outDir = path.join('build', 'pins');
-  fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'pins.csv'), lines.join('\n'), 'utf8');
+  const outputDirectory = path.join('build', 'pins');
+  fs.mkdirSync(outputDirectory, { recursive: true });
+  fs.writeFileSync(path.join(outputDirectory, 'pins.csv'), csvRows.join('\n'), 'utf8');
 }
 
 function main(): void {
-  const [inputPath] = process.argv.slice(2);
-  if (!inputPath) {
+  const [inputFilePath] = process.argv.slice(2);
+  if (!inputFilePath) {
     console.error('Usage: node mdz-seo-pins.js <input-json>');
     process.exit(1);
   }
-  const raw = fs.readFileSync(inputPath, 'utf8');
-  const products: ProductInput[] = JSON.parse(raw);
+  const rawJsonContent = fs.readFileSync(inputFilePath, 'utf8');
+  const products: ProductInput[] = JSON.parse(rawJsonContent);
   generateSeoFiles(products);
-  generatePinsCsv(products);
+  generatePinterestCsv(products);
   console.log(`Generated SEO and pins files for ${products.length} products.`);
 }
 
